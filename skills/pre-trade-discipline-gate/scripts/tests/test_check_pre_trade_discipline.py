@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 from check_pre_trade_discipline import (
+    _load_structured_file,
     evaluate_pre_trade_gate,
     finalize_links,
     load_candidates,
@@ -63,6 +64,9 @@ def write_thesis(
     outcome_pnl: float | None = None,
     exit_date: str | None = None,
     monitoring: dict | None = None,
+    thesis_statement: str | None = None,
+    lessons_learned: str | None = None,
+    allow_unicode: bool = False,
 ) -> Path:
     thesis = {
         "thesis_id": thesis_id,
@@ -72,7 +76,7 @@ def write_thesis(
         "thesis_type": "growth_momentum",
         "status": status,
         "status_history": history or [],
-        "thesis_statement": f"{ticker} test thesis",
+        "thesis_statement": thesis_statement or f"{ticker} test thesis",
         "origin": {"skill": "pre-trade-test", "output_file": "fixture.json"},
         "linked_reports": [],
         "monitoring": monitoring
@@ -87,11 +91,16 @@ def write_thesis(
         "exit": {},
         "outcome": {"pnl_dollars": outcome_pnl, "pnl_pct": None},
     }
+    if lessons_learned is not None:
+        thesis["outcome"]["lessons_learned"] = lessons_learned
     if exit_date:
         thesis["exit"] = {"actual_date": exit_date, "actual_price": 95.0, "exit_reason": "manual"}
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / f"{thesis_id}.yaml"
-    path.write_text(yaml.safe_dump(thesis, sort_keys=False), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(thesis, sort_keys=False, allow_unicode=allow_unicode),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -496,6 +505,53 @@ def test_recent_partial_loss_blocks_revenge_trade(tmp_path: Path):
     assert any(
         "recent losing exit/trim within 24h" in r for r in result["candidate_results"][0]["reasons"]
     )
+
+
+def test_non_ascii_thesis_is_loaded_not_skipped(tmp_path: Path):
+    """Regression test for #737: a thesis whose YAML holds raw non-ASCII bytes
+    must load under a non-UTF-8 locale (Windows cp1252), not be skipped with
+    only a "Skipped <path>" warning that hides a recent loss from the
+    revenge-trade check.
+
+    The fixture is written with allow_unicode=True, mirroring how
+    trader-memory-core writes thesis files. On a UTF-8-locale machine the
+    locale default happens to decode it, so reproduce the failure under a
+    non-UTF-8 locale (e.g. LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0).
+    """
+    state_dir = tmp_path / "theses"
+    write_thesis(
+        state_dir,
+        history=[
+            {
+                "status": "PARTIALLY_CLOSED",
+                "at": "2026-07-03T11:00:00-04:00",
+                "reason": "loss trim",
+                "realized_pnl": -250,
+            }
+        ],
+        thesis_statement="日本株の成長 thesis",
+        lessons_learned="損切りが遅れた",
+        allow_unicode=True,
+    )
+
+    result = evaluate(tmp_path, [base_candidate()], state_dir=state_dir)
+
+    assert result["overall_decision"] == "NO_GO"
+    assert any(
+        "recent losing exit/trim within 24h" in r for r in result["candidate_results"][0]["reasons"]
+    )
+
+
+def test_structured_file_loads_non_ascii_yaml(tmp_path: Path):
+    """Regression test for #737: _load_structured_file must read YAML with
+    explicit UTF-8, not the locale encoding (Windows cp1252)."""
+    path = tmp_path / "answers.yaml"
+    path.write_text(
+        yaml.safe_dump({"note": "日本語メモ"}, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    assert _load_structured_file(path) == {"note": "日本語メモ"}
 
 
 def test_terminal_outcome_fallback_blocks_revenge_trade(tmp_path: Path):

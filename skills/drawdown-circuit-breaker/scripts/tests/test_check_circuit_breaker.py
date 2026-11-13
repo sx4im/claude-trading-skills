@@ -59,6 +59,9 @@ def write_thesis(
     history: list[dict] | None = None,
     pnl_dollars: float | None = None,
     exit_date: str | None = None,
+    thesis_statement: str | None = None,
+    lessons_learned: str | None = None,
+    allow_unicode: bool = False,
 ) -> Path:
     state_dir.mkdir(parents=True, exist_ok=True)
     if history is None:
@@ -81,11 +84,16 @@ def write_thesis(
         "thesis_type": "growth_momentum",
         "status": status,
         "status_history": default_history,
-        "thesis_statement": f"{ticker} test thesis",
+        "thesis_statement": thesis_statement or f"{ticker} test thesis",
         "origin": {"skill": "test", "output_file": "fixture.json"},
     }
-    if pnl_dollars is not None:
-        thesis["outcome"] = {"pnl_dollars": pnl_dollars, "pnl_pct": pnl_dollars / 1000}
+    if pnl_dollars is not None or lessons_learned is not None:
+        thesis["outcome"] = {
+            "pnl_dollars": pnl_dollars,
+            "pnl_pct": pnl_dollars / 1000 if pnl_dollars is not None else None,
+        }
+        if lessons_learned is not None:
+            thesis["outcome"]["lessons_learned"] = lessons_learned
     if exit_date is not None:
         thesis["exit"] = {"actual_date": exit_date, "actual_price": 100.0, "exit_reason": "manual"}
     if status in {"ACTIVE", "PARTIALLY_CLOSED"}:
@@ -100,7 +108,10 @@ def write_thesis(
         }
 
     path = state_dir / f"{thesis_id}.yaml"
-    path.write_text(yaml.safe_dump(thesis, sort_keys=False), encoding="utf-8")
+    path.write_text(
+        yaml.safe_dump(thesis, sort_keys=False, allow_unicode=allow_unicode),
+        encoding="utf-8",
+    )
     return path
 
 
@@ -194,6 +205,51 @@ def test_daily_loss_below_threshold_is_allowed(tmp_path: Path):
 
     assert result["metrics"]["realized_pnl_today"] == -1999.99
     assert result["recommendation"] == "TRADING_ALLOWED"
+
+
+def test_non_ascii_closed_thesis_is_loaded_not_skipped(tmp_path: Path):
+    """Regression test for #737: a CLOSED thesis whose YAML holds raw non-ASCII
+    bytes must load under a non-UTF-8 locale (Windows cp1252), not be skipped
+    with only a "Skipped <path>" warning that under-counts drawdown.
+
+    The fixture is written with allow_unicode=True, mirroring how
+    trader-memory-core writes thesis files. On a UTF-8-locale machine the
+    locale default happens to decode it, so reproduce the failure under a
+    non-UTF-8 locale (e.g. LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0).
+    """
+    state_dir = tmp_path / "theses"
+    write_thesis(
+        state_dir,
+        "th_jp_gm_20260702_0001",
+        status="CLOSED",
+        history=[
+            {
+                "status": "CLOSED",
+                "at": "2026-07-02T15:00:00-04:00",
+                "reason": "manual",
+                "realized_pnl": -2000.0,
+            }
+        ],
+        pnl_dollars=-2000.0,
+        exit_date="2026-07-02",
+        thesis_statement="日本株の成長 thesis",
+        lessons_learned="損切りが遅れた",
+        allow_unicode=True,
+    )
+
+    theses, quality, warnings = load_theses(state_dir)
+
+    assert [thesis["thesis_id"] for thesis in theses] == ["th_jp_gm_20260702_0001"]
+    assert theses[0]["thesis_statement"] == "日本株の成長 thesis"
+    assert theses[0]["outcome"]["lessons_learned"] == "損切りが遅れた"
+    assert quality == "OK"
+    assert warnings == []
+
+    result = evaluate_state(state_dir)
+
+    assert result["metrics"]["theses_scanned"] == 1
+    assert result["metrics"]["realized_pnl_today"] == -2000.0
+    assert result["recommendation"] == "HALTED"
 
 
 def test_producer_trim_bare_date_counts_on_named_trading_date(tmp_path: Path):
