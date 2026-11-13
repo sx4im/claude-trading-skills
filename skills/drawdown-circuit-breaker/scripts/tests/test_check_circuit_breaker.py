@@ -1806,3 +1806,41 @@ def test_missing_calendar_dependency_exits_2_with_hint(tmp_path: Path, monkeypat
     assert "ERROR: pandas-market-calendars library not found" in captured.err
     assert "requirements.txt" in captured.err
     assert not (tmp_path / "reports").exists()
+
+
+def test_closed_thesis_with_non_ascii_text_counts_toward_drawdown(tmp_path: Path):
+    # Issue #737: thesis YAML files are written as UTF-8, so a reader that
+    # relies on the locale encoding skips them on Windows (cp1252) and the
+    # loss disappears from the drawdown computation.
+    state_dir = tmp_path / "theses"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    thesis = {
+        "thesis_id": "th_jp_gm_20260702_0001",
+        "ticker": "TEST",
+        "created_at": "2026-06-01T09:30:00-04:00",
+        "updated_at": "2026-07-02T16:00:00-04:00",
+        "thesis_type": "growth_momentum",
+        "status": "CLOSED",
+        "status_history": [
+            {
+                "status": "CLOSED",
+                "at": "2026-07-02T15:00:00-04:00",
+                "reason": "manual",
+            }
+        ],
+        "thesis_statement": "日本語のテーゼ",
+        "origin": {"skill": "test", "output_file": "fixture.json"},
+        "outcome": {
+            "pnl_dollars": -1000.0,
+            "pnl_pct": -1.0,
+            "lessons_learned": "日本語の教訓",
+        },
+    }
+    path = state_dir / "th_jp_gm_20260702_0001.yaml"
+    path.write_text(yaml.safe_dump(thesis, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+    result = evaluate_state(state_dir)
+
+    assert result["metrics"]["realized_pnl_today"] == -1000.0
+    assert result["recommendation"] == "TRADING_ALLOWED"
+    assert not any("Skipped" in warning for warning in result["warnings"])

@@ -9,9 +9,11 @@ from pathlib import Path
 import pytest
 import yaml
 from check_pre_trade_discipline import (
+    _load_structured_file,
     evaluate_pre_trade_gate,
     finalize_links,
     load_candidates,
+    load_theses,
     main,
     parse_as_of,
     write_journal,
@@ -819,3 +821,46 @@ def test_yaml_answers_file_is_supported(tmp_path: Path):
     answers = write_yaml(tmp_path / "answers.yaml", {"candidates": [base_candidate()]})
 
     assert load_candidates(answers)[0]["symbol"] == "AAPL"
+
+
+def test_non_ascii_thesis_loads_as_utf8(tmp_path: Path):
+    # Issue #737: thesis YAML files are written as UTF-8, so a reader that
+    # relies on the locale encoding skips them on Windows (cp1252).
+    state_dir = tmp_path / "theses"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    thesis = {
+        "thesis_id": "th_jp_gm_20260702_0001",
+        "ticker": "TEST",
+        "created_at": "2026-07-01T09:30:00-04:00",
+        "updated_at": "2026-07-02T16:00:00-04:00",
+        "thesis_type": "growth_momentum",
+        "status": "CLOSED",
+        "status_history": [],
+        "thesis_statement": "日本語のテーゼ",
+        "origin": {"skill": "pre-trade-test", "output_file": "fixture.json"},
+        "outcome": {
+            "pnl_dollars": None,
+            "pnl_pct": None,
+            "lessons_learned": "日本語の教訓",
+        },
+    }
+    path = state_dir / "th_jp_gm_20260702_0001.yaml"
+    path.write_text(yaml.safe_dump(thesis, sort_keys=False, allow_unicode=True), encoding="utf-8")
+
+    theses, warnings = load_theses(state_dir)
+
+    assert warnings == []
+    assert len(theses) == 1
+    assert theses[0]["thesis_statement"] == "日本語のテーゼ"
+    assert theses[0]["outcome"]["lessons_learned"] == "日本語の教訓"
+
+
+def test_structured_file_reads_non_ascii_yaml_as_utf8(tmp_path: Path):
+    # Issue #737: same locale-encoding hazard as the thesis readers.
+    path = tmp_path / "answers.yaml"
+    path.write_text(
+        yaml.safe_dump({"note": "日本語"}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+
+    assert _load_structured_file(path) == {"note": "日本語"}

@@ -18,6 +18,7 @@ All notable changes to this repository are recorded here in [Keep a Changelog](h
 - trader-memory-core: generate historical-only postmortems for retired legacy equity shorts without fetching prices or changing state; suppress unsupported accounting values and explain their omission (#682).
 - Extend static CLI option validation to unmarked skill instructions and nested references, trigger it on reference-only changes, and correct rejected flags and paths without executing documented commands (#661).
 - exposure-coach: consume canonical theme-detector reports with a documented directional-heat adapter, validate row/quality contracts, preserve upstream warnings and distinguish supplied unparsable theme inputs from omitted files (#673).
+- drawdown-circuit-breaker and pre-trade-discipline-gate: read thesis YAML (and structured answers files) as UTF-8 instead of the locale encoding, so non-ASCII theses are no longer silently skipped on Windows; add a non-ASCII thesis test for each skill and repackage both skills (#737).
 
 - theme-detector: prefer authenticated FINVIZ group export with safe public fallback, require finvizfinance>=1.5.0 for Python3.10+ public scraping, and merge overlapping ETF holdings without a missing-score crash (#671).
 
