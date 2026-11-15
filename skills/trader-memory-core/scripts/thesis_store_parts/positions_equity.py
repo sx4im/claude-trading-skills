@@ -345,6 +345,14 @@ def close(
     Raises:
         ValueError: If thesis is not ACTIVE/PARTIALLY_CLOSED or entry missing.
     """
+    # Issue #760: a bare YYYY-MM-DD fails schema validation (exit.actual_date
+    # and status_history.at are date-time). Normalize once here, before the
+    # futures dispatch, so every downstream write — equity, futures, and the
+    # outcome finalizer — sees a date-time, as transition()/trim() and the
+    # CLI already do via _coerce_dt().
+    actual_date = _coerce_dt(actual_date)
+    event_date = _coerce_dt(event_date)
+
     thesis = _load_thesis(state_dir, thesis_id)
 
     # Dispatch at function entry (D2/D4 non-negotiable, see _is_futures
@@ -645,6 +653,14 @@ def open_position(
         ValueError: If thesis is not ENTRY_READY, or an equity open has no
             share count (neither `shares` nor an attached position's shares).
     """
+    # Issue #760: a bare YYYY-MM-DD fails schema validation (entry.actual_date
+    # and status_history.at are date-time). Normalize once here, before the
+    # futures dispatch, so every downstream write — equity and futures — sees
+    # a date-time, as transition()/trim() and the CLI already do via
+    # _coerce_dt().
+    actual_date = _coerce_dt(actual_date)
+    event_date = _coerce_dt(event_date)
+
     if not isinstance(allow_gap_fill, bool):
         raise ValueError("allow_gap_fill must be a bool")
 

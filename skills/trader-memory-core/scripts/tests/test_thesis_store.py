@@ -478,6 +478,77 @@ def test_close_computes_pnl_and_holding_days(tmp_path: Path):
 
 def test_close_non_active_raises(tmp_path: Path):
     """close() on non-ACTIVE thesis should raise ValueError."""
+
+
+def test_open_position_normalizes_date_only_actual_date(tmp_path: Path):
+    """Issue #760: open_position() with a bare YYYY-MM-DD actual_date must
+    normalize it to midnight UTC instead of failing schema validation."""
+    tid, _ = _register_and_get(tmp_path)
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "ok")
+    thesis = thesis_store.open_position(tmp_path, tid, 150.0, "2026-05-03", shares=10)
+
+    assert thesis["status"] == "ACTIVE"
+    assert thesis["entry"]["actual_date"] == "2026-05-03T00:00:00+00:00"
+
+
+def test_open_position_normalizes_date_only_event_date(tmp_path: Path):
+    """Issue #760: open_position() with a bare YYYY-MM-DD event_date must
+    normalize the status_history timestamp instead of failing validation."""
+    tid, _ = _register_and_get(tmp_path, _source_date="2026-05-03")
+    # Backfill the whole chain (the established idiom in
+    # test_equity_long_only.py): the transition entry must not postdate
+    # the backdated open, or the monotonicity validator rejects the save.
+    thesis_store.transition(tmp_path, tid, "ENTRY_READY", "ok", event_date="2026-05-03")
+    thesis = thesis_store.open_position(
+        tmp_path, tid, 151.0, "2026-05-03T10:00:00+00:00", shares=10,
+        event_date="2026-05-03",
+    )
+
+    assert thesis["status"] == "ACTIVE"
+    assert thesis["entry"]["actual_date"] == "2026-05-03T10:00:00+00:00"
+    assert thesis["status_history"][-1]["at"] == "2026-05-03T00:00:00+00:00"
+
+
+def _open_active_thesis(state_dir, **open_kwargs):
+    """Register + ENTRY_READY + open_position; returns the thesis id.
+
+    Backfills the transition and the open to 2026-05-03 so a later
+    backdated close stays monotonic (see test_equity_long_only.py)."""
+    tid, _ = _register_and_get(state_dir, _source_date="2026-05-03")
+    thesis_store.transition(state_dir, tid, "ENTRY_READY", "validated",
+                            event_date="2026-05-03")
+    thesis_store.open_position(
+        state_dir, tid, 150.0, "2026-05-03T00:00:00+00:00", shares=10,
+        event_date="2026-05-03", **open_kwargs
+    )
+    return tid
+
+
+def test_close_normalizes_date_only_actual_date(tmp_path: Path):
+    """Issue #760: close() with a bare YYYY-MM-DD actual_date must
+    normalize it to midnight UTC instead of failing schema validation."""
+    state_dir = tmp_path / "theses"
+    tid = _open_active_thesis(state_dir)
+    thesis = thesis_store.close(state_dir, tid, "target_hit", 160.0, "2026-05-10")
+
+    assert thesis["status"] == "CLOSED"
+    assert thesis["exit"]["actual_date"] == "2026-05-10T00:00:00+00:00"
+    assert thesis["outcome"]["holding_days"] == 7
+
+
+def test_close_normalizes_date_only_event_date(tmp_path: Path):
+    """Issue #760: close() with a bare YYYY-MM-DD event_date must
+    normalize the status_history timestamp instead of failing validation."""
+    state_dir = tmp_path / "theses"
+    tid = _open_active_thesis(state_dir)
+    thesis = thesis_store.close(
+        state_dir, tid, "target_hit", 160.0, "2026-05-10T10:00:00+00:00",
+        event_date="2026-05-10",
+    )
+
+    assert thesis["status"] == "CLOSED"
+    assert thesis["exit"]["actual_date"] == "2026-05-10T10:00:00+00:00"
+    assert thesis["status_history"][-1]["at"] == "2026-05-10T00:00:00+00:00"
     state_dir = tmp_path / "theses"
     tid, _ = _register_and_get(state_dir)
 

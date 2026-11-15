@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     import yaml
 
     INDEX_FILE = thesis_store.INDEX_FILE
+    _DATE_RE = thesis_store._DATE_RE
     _TYPE_ABBR = thesis_store._TYPE_ABBR
     _VALID_THESIS_TYPES = thesis_store._VALID_THESIS_TYPES
     _validate_thesis = thesis_store._validate_thesis
@@ -45,13 +46,18 @@ def _coerce_dt(value: str | None) -> str | None:
     (``_check_datetime`` requires a 'T' separator + timezone). A bare
     ``YYYY-MM-DD`` is widened to midnight UTC — the same idiom register()
     applies to ``_source_date``. A value that already contains 'T' (a full
-    timestamp) is returned unchanged; ``None`` stays ``None``.
+    timestamp) is returned unchanged; ``None`` stays ``None``. Anything
+    else is returned unchanged too, so a malformed value still fails
+    schema validation with its original text instead of a mangled
+    ``<garbage>T00:00:00+00:00`` (Issue #760: open_position()/close()
+    now route through here, and their bad-format tests pin the original
+    value in the error message).
     """
     if value is None:
         return None
-    if "T" in value:
-        return value
-    return f"{value}T00:00:00+00:00"
+    if _DATE_RE.match(value):
+        return f"{value}T00:00:00+00:00"
+    return value
 
 
 def _generate_thesis_id(ticker: str, thesis_type: str, date_str: str) -> str:
