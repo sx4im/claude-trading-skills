@@ -180,7 +180,9 @@ class FMPClient(SharedFMPClient):
             return [row for row in data if isinstance(row, dict)]
         return []
 
-    def get_financials(self, ticker: str, sector: str | None = None) -> dict[str, Any]:
+    def get_financials(
+        self, ticker: str, sector: str | None = None, industry: str | None = None
+    ) -> dict[str, Any]:
         """WS-2 (5th-review F1): minimal financials for the payout triad.
 
         Adjusted EPS is NOT in FMP -> source UNAVAILABLE by design (the
@@ -188,6 +190,9 @@ class FMPClient(SharedFMPClient):
         sector metrics). Sector metric dicts are left None when FMP does
         not expose them, which deterministically raises *_unavailable
         blockers (CAUTION) for manual fill rather than a false PASS.
+        The FMP profile industry rides along so payout-safety routing can
+        use it (#771); per-share AFFO is not in FMP either, so it stays
+        None until a source exists (the REIT path fail-safes to CAUTION).
         """
         inc = self._get("income-statement", {"symbol": ticker, "limit": 1})
         cf = self._get("cash-flow-statement", {"symbol": ticker, "limit": 1})
@@ -211,10 +216,12 @@ class FMPClient(SharedFMPClient):
                 fcf_ps = fcf / shares
         return {
             "sector": sector,
+            "industry": industry,
             "gaap_eps": gaap_eps,
             "adjusted_eps": None,
             "adjusted_eps_source": "UNAVAILABLE",
             "fcf_per_share": fcf_ps,
+            "affo_per_share": None,
         }
 
 
@@ -421,11 +428,13 @@ def build_entry_row(
     if financials is not None:
         safety = assess_payout_safety(
             sector=financials.get("sector") or (profile or {}).get("sector"),
+            industry=financials.get("industry") or (profile or {}).get("industry"),
             annual_dividend=annual_dividend,
             gaap_eps=financials.get("gaap_eps"),
             adjusted_eps=financials.get("adjusted_eps"),
             adjusted_eps_source=financials.get("adjusted_eps_source", "UNAVAILABLE"),
             fcf_per_share=financials.get("fcf_per_share"),
+            affo_per_share=financials.get("affo_per_share"),
             completed_merger_within_4q=bool(
                 financials.get("completed_merger_within_4q", False)
                 or event_scan.completed_mna_within_4q
@@ -436,6 +445,7 @@ def build_entry_row(
         )
         row["payout_safety"] = {
             "sector_kind": safety.sector_kind,
+            "sector_kind_source": safety.sector_kind_source,
             "safety_verdict": safety.safety_verdict,
             "gaap_eps_payout": safety.gaap_eps_payout,
             "adjusted_eps_payout": safety.adjusted_eps_payout,
@@ -691,7 +701,8 @@ def main() -> int:
         dividend_history = client.get_stock_dividend(ticker)
         event_scan = scanner.scan(ticker, args.as_of) if scanner else None
         sector = (profiles.get(ticker) or {}).get("sector")
-        financials = client.get_financials(ticker, sector=sector)
+        industry = (profiles.get(ticker) or {}).get("industry")
+        financials = client.get_financials(ticker, sector=sector, industry=industry)
         row = build_entry_row(
             ticker=ticker,
             alpha_pp=args.alpha_pp,
