@@ -13,6 +13,11 @@ Key rules (improvement-plan v2.1 R-3 + 4th-review):
   EPS is distorted -> force the adjusted path or HOLD-REVIEW
   (FITB/Comerica Q1-2026 GAAP EPS $0.15 is the golden case).
 - Emits machine-checkable pre_order_blocker codes for WS-6 (4th-review #6).
+- Routing is industry-aware (#771): FMP reports insurers and REITs under
+  broader sectors ("Financial Services", "Real Estate"), so the FMP
+  `industry` field (or an explicit kind override) decides the kind first
+  and `sector` is the fallback. Unknown or ambiguous classification
+  HOLD-REVIEWs instead of silently applying another sector's rules.
 """
 
 from __future__ import annotations
@@ -29,6 +34,8 @@ from thresholds import (
     FCF_PAYOUT_MAX,
     GAAP_ADJ_DIVERGENCE,
     INSURER_OP_EPS_PAYOUT_MAX,
+    REIT_AFFO_PAYOUT_CAUTION,
+    REIT_AFFO_PAYOUT_MAX,
     UTILITY_FFO_DEBT_MIN,
 )
 
@@ -64,6 +71,64 @@ def _sector_kind(sector: str | None) -> str:
     return "consumer"
 
 
+# FMP industry fragments (#771). FMP reports insurers and REITs under
+# broader sectors, so the industry string is the more specific signal.
+# Substring match on the lowercased industry: "Insurance - Property &
+# Casualty", "REIT - Residential" and "Banks - Regional" all match.
+_INSURER_INDUSTRIES = ("insurance",)
+_REIT_INDUSTRIES = ("reit",)
+_BANK_INDUSTRIES = ("bank",)
+_UTILITY_INDUSTRIES = ("utilit",)
+
+# Sectors too broad to route on alone: "Financial Services" lumps banks,
+# insurers, asset managers and brokers, so an unrecognized industry under
+# one of these must HOLD-REVIEW instead of defaulting to the bank path.
+_BROAD_FINANCIAL_SECTORS = {"financial", "financials", "financial services"}
+
+_VALID_KINDS = ("bank", "utility", "insurer", "reit", "consumer")
+
+
+def _classify_industry(industry: str | None) -> str | None:
+    text = (industry or "").strip().lower()
+    if not text:
+        return None
+    if any(fragment in text for fragment in _INSURER_INDUSTRIES):
+        return "insurer"
+    if any(fragment in text for fragment in _REIT_INDUSTRIES):
+        return "reit"
+    if any(fragment in text for fragment in _BANK_INDUSTRIES):
+        return "bank"
+    if any(fragment in text for fragment in _UTILITY_INDUSTRIES):
+        return "utility"
+    return None
+
+
+def _resolve_kind(
+    sector: str | None, industry: str | None, kind_override: str | None
+) -> tuple[str, str, str | None]:
+    """Return (kind, routing_source, hold_blocker).
+
+    Precedence: explicit kind override, then FMP industry, then sector.
+    hold_blocker is set when the classification is unknown or ambiguous
+    and the caller must HOLD-REVIEW instead of assessing.
+    """
+    sector_norm = (sector or "").strip().lower()
+    industry_norm = (industry or "").strip().lower()
+    if kind_override is not None:
+        override = kind_override.strip().lower()
+        if override in _VALID_KINDS:
+            return override, "kind_override", None
+        return "unknown", "unknown", "kind_override_invalid"
+    industry_kind = _classify_industry(industry)
+    if industry_kind is not None:
+        return industry_kind, "industry", None
+    if not sector_norm and not industry_norm:
+        return "unknown", "unknown", "sector_industry_unknown"
+    if sector_norm in _BROAD_FINANCIAL_SECTORS and industry_norm:
+        return "unknown", "unknown", "sector_industry_ambiguous"
+    return _sector_kind(sector), "sector", None
+
+
 def _finite_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
@@ -78,6 +143,7 @@ def _ratio(numerator: float | None, denominator: float | None) -> float | None:
 class SafetyAssessment:
     sector_kind: str
     safety_verdict: str  # PASS | CAUTION | FAIL | HOLD-REVIEW
+    routing_source: str = "sector"  # sector | industry | kind_override | unknown
     gaap_eps_payout: float | None = None
     adjusted_eps_payout: float | None = None
     fcf_payout: float | None = None
@@ -91,31 +157,57 @@ class SafetyAssessment:
 def assess_payout_safety(
     *,
     sector: str | None,
+    industry: str | None = None,
+    kind_override: str | None = None,
     annual_dividend: float | None,
     gaap_eps: float | None = None,
     adjusted_eps: float | None = None,
     adjusted_eps_source: str = "UNAVAILABLE",
     fcf_per_share: float | None = None,
+    affo_per_share: float | None = None,
     completed_merger_within_4q: bool = False,
     bank_metrics: dict | None = None,
     utility_metrics: dict | None = None,
     insurer_metrics: dict | None = None,
 ) -> SafetyAssessment:
-    kind = _sector_kind(sector)
-    reasons: list[str] = []
-    blockers: list[str] = []
-
     gaap_payout = _ratio(annual_dividend, gaap_eps)
     adj_payout = _ratio(annual_dividend, adjusted_eps)
     fcf_payout = _ratio(annual_dividend, fcf_per_share)
+    affo_payout = _ratio(annual_dividend, affo_per_share)
+
+    kind, routing_source, hold_blocker = _resolve_kind(sector, industry, kind_override)
+    reasons: list[str] = []
+    blockers: list[str] = []
+
+    if hold_blocker is not None:
+        reasons.append(hold_blocker)
+        blockers.append(hold_blocker)
+        return SafetyAssessment(
+            sector_kind=kind,
+            safety_verdict="HOLD-REVIEW",
+            routing_source=routing_source,
+            gaap_eps_payout=_round(gaap_payout),
+            adjusted_eps_payout=_round(adj_payout),
+            fcf_payout=_round(fcf_payout),
+            adjusted_eps_source=adjusted_eps_source,
+            reasons=reasons,
+            blockers=sorted(blockers),
+        )
 
     # Reject invalid income anchors before division/divergence can hide losses.
-    # FCF is deliberately not an anchor for banks, insurers or utilities.
+    # FCF is deliberately not an anchor for banks, insurers, utilities or
+    # REITs. For REITs the anchor is AFFO, not GAAP EPS: GAAP EPS is
+    # depreciation-distorted, so a negative GAAP EPS must not HOLD a REIT
+    # whose AFFO payout is healthy (#771).
     anchors = {"gaap_eps": gaap_eps}
     if kind == "consumer":
         anchors.update(adjusted_eps=adjusted_eps, fcf_per_share=fcf_per_share)
     elif kind == "insurer" and adjusted_eps is not None:
         anchors["adjusted_eps"] = adjusted_eps
+    elif kind == "reit":
+        anchors = {}
+        if affo_per_share is not None:
+            anchors["affo_per_share"] = affo_per_share
     for name, value in anchors.items():
         if value is not None and (not _finite_number(value) or value <= 0):
             blockers.append(name + "_non_positive_or_unavailable")
@@ -125,6 +217,7 @@ def assess_payout_safety(
         return SafetyAssessment(
             sector_kind=kind,
             safety_verdict="HOLD-REVIEW",
+            routing_source=routing_source,
             gaap_eps_payout=_round(gaap_payout),
             adjusted_eps_payout=_round(adj_payout),
             fcf_payout=_round(fcf_payout),
@@ -151,6 +244,7 @@ def assess_payout_safety(
             return SafetyAssessment(
                 sector_kind=kind,
                 safety_verdict="HOLD-REVIEW",
+                routing_source=routing_source,
                 gaap_eps_payout=_round(gaap_payout),
                 adjusted_eps_payout=None,
                 fcf_payout=_round(fcf_payout),
@@ -163,9 +257,9 @@ def assess_payout_safety(
         one_off = True
 
     # Adjusted EPS is the safety ANCHOR only for the consumer path. For
-    # banks/utilities/insurers the sector module is the anchor, so a missing
-    # adjusted EPS must NOT force HOLD-REVIEW there (5th-review F2). The
-    # completed-merger GAAP-distortion path above still HOLDs regardless.
+    # banks/utilities/insurers/reits the sector module is the anchor, so a
+    # missing adjusted EPS must NOT force HOLD-REVIEW there (5th-review F2).
+    # The completed-merger GAAP-distortion path above still HOLDs regardless.
     adj_missing = adjusted_eps is None or adjusted_eps_source == "UNAVAILABLE"
 
     if kind == "bank":
@@ -174,6 +268,8 @@ def assess_payout_safety(
         verdict = _assess_utility(utility_metrics or {}, gaap_payout, reasons, blockers)
     elif kind == "insurer":
         verdict = _assess_insurer(insurer_metrics or {}, gaap_payout, adj_payout, reasons, blockers)
+    elif kind == "reit":
+        verdict = _assess_reit(affo_payout, reasons, blockers)
     else:
         if adj_missing:
             blockers.append("adjusted_eps_unavailable")
@@ -185,6 +281,7 @@ def assess_payout_safety(
     return SafetyAssessment(
         sector_kind=kind,
         safety_verdict=verdict,
+        routing_source=routing_source,
         gaap_eps_payout=_round(gaap_payout),
         adjusted_eps_payout=_round(adj_payout),
         fcf_payout=_round(fcf_payout),
@@ -293,6 +390,23 @@ def _assess_utility(m: dict, eps_payout, reasons, blockers) -> str:
         reasons.append("utility_eps_payout_above_100pct")
         verdict = "FAIL"
     return verdict
+
+
+def _assess_reit(affo_payout, reasons, blockers) -> str:
+    # REITs: GAAP EPS is depreciation-distorted, so AFFO payout is the
+    # anchor. AFFO is not in FMP; a missing AFFO must NOT produce a false
+    # PASS — CAUTION for manual fill, like the other sector paths' metric
+    # gaps (#771).
+    if affo_payout is None:
+        blockers.append("reit_affo_unavailable")
+        return "CAUTION"
+    if affo_payout > REIT_AFFO_PAYOUT_MAX:
+        reasons.append("reit_affo_payout_above_100pct")
+        return "FAIL"
+    if affo_payout > REIT_AFFO_PAYOUT_CAUTION:
+        reasons.append("reit_affo_payout_caution_band")
+        return "CAUTION"
+    return "PASS"
 
 
 def _assess_insurer(m: dict, gaap_payout, op_eps_payout, reasons, blockers) -> str:

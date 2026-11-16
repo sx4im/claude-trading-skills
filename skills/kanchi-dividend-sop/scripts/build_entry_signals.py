@@ -421,11 +421,15 @@ def build_entry_row(
     if financials is not None:
         safety = assess_payout_safety(
             sector=financials.get("sector") or (profile or {}).get("sector"),
+            # #771: FMP industry decides the kind first (insurers and REITs
+            # sit under broader sectors); sector is the fallback.
+            industry=financials.get("industry") or (profile or {}).get("industry"),
             annual_dividend=annual_dividend,
             gaap_eps=financials.get("gaap_eps"),
             adjusted_eps=financials.get("adjusted_eps"),
             adjusted_eps_source=financials.get("adjusted_eps_source", "UNAVAILABLE"),
             fcf_per_share=financials.get("fcf_per_share"),
+            affo_per_share=financials.get("affo_per_share"),
             completed_merger_within_4q=bool(
                 financials.get("completed_merger_within_4q", False)
                 or event_scan.completed_mna_within_4q
@@ -436,6 +440,7 @@ def build_entry_row(
         )
         row["payout_safety"] = {
             "sector_kind": safety.sector_kind,
+            "routing_source": safety.routing_source,
             "safety_verdict": safety.safety_verdict,
             "gaap_eps_payout": safety.gaap_eps_payout,
             "adjusted_eps_payout": safety.adjusted_eps_payout,

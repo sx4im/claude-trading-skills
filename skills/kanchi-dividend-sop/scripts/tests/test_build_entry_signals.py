@@ -157,3 +157,58 @@ def test_build_entry_row_ws5_verdict_and_provenance() -> None:
     assert row["t1_blocked"] is True
     assert row["provenance"]["dividend_source"] == "fmp_stock_dividend"
     assert "evidence_refs" in row["provenance"]
+
+
+def test_build_entry_row_routes_insurer_by_industry() -> None:
+    # #771: FMP reports ORI under "Financial Services" with an insurance
+    # industry; the row must carry the insurer path, not the bank path.
+    row = build_entry_row(
+        ticker="ORI",
+        alpha_pp=0.5,
+        quote={"price": 37.0},
+        profile={
+            "lastDiv": 1.26,
+            "sector": "Financial Services",
+            "industry": "Insurance - Property & Casualty",
+        },
+        key_metrics=[{"dividendYield": 0.034}],
+        financials={
+            "sector": "Financial Services",
+            "gaap_eps": 3.0,
+            "adjusted_eps": 3.0,
+            "adjusted_eps_source": "FMP",
+            "insurer_metrics": {"combined_ratio": 0.95},
+        },
+    )
+    assert row["payout_safety"]["sector_kind"] == "insurer"
+    assert row["payout_safety"]["routing_source"] == "industry"
+    assert row["payout_safety"]["safety_verdict"] == "PASS"
+    assert "bank_capital_unavailable" not in row.get("pre_order_blockers", [])
+    assert "bank_cre_concentration_unavailable" not in row.get("pre_order_blockers", [])
+
+
+def test_build_entry_row_routes_reit_by_industry() -> None:
+    # #771: O-like REIT under "Real Estate" takes the REIT/AFFO path and
+    # fails safe (AFFO unavailable) instead of the consumer triad.
+    row = build_entry_row(
+        ticker="O",
+        alpha_pp=0.5,
+        quote={"price": 55.0},
+        profile={
+            "lastDiv": 2.0,
+            "sector": "Real Estate",
+            "industry": "REIT - Retail",
+        },
+        key_metrics=[{"dividendYield": 0.036}],
+        financials={
+            "sector": "Real Estate",
+            "industry": "REIT - Retail",
+            "gaap_eps": 3.0,
+            "adjusted_eps": 3.0,
+            "adjusted_eps_source": "FMP",
+        },
+    )
+    assert row["payout_safety"]["sector_kind"] == "reit"
+    assert row["payout_safety"]["routing_source"] == "industry"
+    assert row["payout_safety"]["safety_verdict"] == "CAUTION"
+    assert "reit_affo_unavailable" in row.get("pre_order_blockers", [])

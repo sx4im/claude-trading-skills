@@ -137,3 +137,198 @@ def test_consumer_fcf_payout_over_100_fails():
         fcf_per_share=2.0,  # 3.0/2.0 = 150% FCF payout
     )
     assert a.safety_verdict == "FAIL"
+
+
+# --- #771: industry-aware routing (FMP sector alone misroutes) ---
+def test_financial_services_insurance_industry_routes_insurer():
+    # ORI repro from #771: FMP reports sector "Financial Services" with
+    # industry "Insurance - Property & Casualty".
+    a = assess_payout_safety(
+        sector="Financial Services",
+        industry="Insurance - Property & Casualty",
+        annual_dividend=1.26,
+        gaap_eps=3,
+        insurer_metrics={"combined_ratio": 0.95},
+    )
+    assert a.sector_kind == "insurer"
+    assert a.routing_source == "industry"
+    assert "bank_capital_unavailable" not in a.blockers
+    assert "bank_cre_concentration_unavailable" not in a.blockers
+    assert a.safety_verdict == "PASS"
+
+
+def test_insurance_industry_variants_route_insurer():
+    for industry in (
+        "Insurance - Life",
+        "Insurance - Diversified",
+        "Insurance - Specialty",
+        "Insurance Brokers",
+    ):
+        a = assess_payout_safety(
+            sector="Financial Services",
+            industry=industry,
+            annual_dividend=1.0,
+            gaap_eps=3.0,
+            insurer_metrics={"combined_ratio": 0.95},
+        )
+        assert a.sector_kind == "insurer", industry
+        assert a.routing_source == "industry"
+
+
+def test_reit_industry_routes_reit_and_affo_unavailable_cautions():
+    # O-like REIT: sector "Real Estate", industry "REIT - Residential".
+    # AFFO is not in FMP, so the REIT path must fail safe (CAUTION for
+    # manual fill) instead of silently taking the consumer triad.
+    a = assess_payout_safety(
+        sector="Real Estate",
+        industry="REIT - Residential",
+        annual_dividend=2.0,
+        gaap_eps=3.0,
+    )
+    assert a.sector_kind == "reit"
+    assert a.routing_source == "industry"
+    assert a.safety_verdict == "CAUTION"
+    assert "reit_affo_unavailable" in a.blockers
+
+
+def test_reit_affo_payout_bands():
+    # AFFO payout is the REIT anchor; GAAP EPS is depreciation-distorted.
+    base = dict(sector="Real Estate", industry="REIT - Retail", annual_dividend=2.0)
+    healthy = assess_payout_safety(**base, gaap_eps=1.0, affo_per_share=3.0)  # 67%
+    assert healthy.safety_verdict == "PASS"
+    thin = assess_payout_safety(**base, gaap_eps=1.0, affo_per_share=2.1)  # 95%
+    assert thin.safety_verdict == "CAUTION"
+    assert "reit_affo_payout_caution_band" in thin.reasons
+    unsustainable = assess_payout_safety(**base, gaap_eps=1.0, affo_per_share=1.5)  # 133%
+    assert unsustainable.safety_verdict == "FAIL"
+    assert "reit_affo_payout_above_100pct" in unsustainable.reasons
+
+
+def test_reit_negative_gaap_eps_with_healthy_affo_passes():
+    # GAAP EPS can be negative for a healthy REIT (depreciation); AFFO rules.
+    a = assess_payout_safety(
+        sector="Real Estate",
+        industry="REIT - Office",
+        annual_dividend=2.0,
+        gaap_eps=-0.5,
+        affo_per_share=3.0,
+    )
+    assert a.sector_kind == "reit"
+    assert a.safety_verdict == "PASS"
+
+
+def test_bank_industry_routes_bank():
+    a = assess_payout_safety(
+        sector="Financial Services",
+        industry="Banks - Regional",
+        annual_dividend=1.88,
+        gaap_eps=6.17,
+        adjusted_eps=6.17,
+        adjusted_eps_source="FMP",
+        bank_metrics={"cet1": 0.11, "cre_concentration": "low"},
+    )
+    assert a.sector_kind == "bank"
+    assert a.routing_source == "industry"
+    assert a.safety_verdict == "PASS"
+
+
+def test_utility_industry_routes_utility():
+    a = assess_payout_safety(
+        sector="Utilities",
+        industry="Utilities - Regulated Electric",
+        annual_dividend=1.68,
+        gaap_eps=2.74,
+        adjusted_eps=2.74,
+        adjusted_eps_source="FMP",
+        utility_metrics={"ffo_to_debt": 0.16, "rate_case_status": "constructive"},
+    )
+    assert a.sector_kind == "utility"
+    assert a.routing_source == "industry"
+    assert a.safety_verdict == "PASS"
+
+
+def test_sector_only_fallback_unchanged_without_industry():
+    # Existing behaviour preserved when FMP gives no industry.
+    a = assess_payout_safety(
+        sector="Financial Services",
+        annual_dividend=1.88,
+        gaap_eps=6.17,
+        adjusted_eps=6.17,
+        adjusted_eps_source="FMP",
+        bank_metrics={"cet1": 0.11, "cre_concentration": "low"},
+    )
+    assert a.sector_kind == "bank"
+    assert a.routing_source == "sector"
+
+
+def test_real_estate_developer_stays_consumer():
+    a = assess_payout_safety(
+        sector="Real Estate",
+        industry="Real Estate - Development",
+        annual_dividend=1.0,
+        gaap_eps=3.0,
+        adjusted_eps=3.0,
+        adjusted_eps_source="FMP",
+        fcf_per_share=2.5,
+    )
+    assert a.sector_kind == "consumer"
+    assert a.routing_source == "sector"
+
+
+def test_missing_sector_and_industry_holds_review():
+    a = assess_payout_safety(
+        sector=None,
+        industry=None,
+        annual_dividend=1.0,
+        gaap_eps=3.0,
+        adjusted_eps=3.0,
+        adjusted_eps_source="FMP",
+        fcf_per_share=2.5,
+    )
+    assert a.sector_kind == "unknown"
+    assert a.safety_verdict == "HOLD-REVIEW"
+    assert "sector_industry_unknown" in a.blockers
+
+
+def test_broad_financial_sector_unrecognized_industry_holds_review():
+    # An asset manager under "Financial Services" is not a bank; do not
+    # silently apply bank capital rules.
+    a = assess_payout_safety(
+        sector="Financial Services",
+        industry="Asset Management",
+        annual_dividend=1.0,
+        gaap_eps=3.0,
+        adjusted_eps=3.0,
+        adjusted_eps_source="FMP",
+    )
+    assert a.sector_kind == "unknown"
+    assert a.safety_verdict == "HOLD-REVIEW"
+    assert "sector_industry_ambiguous" in a.blockers
+
+
+def test_kind_override_wins_over_sector_and_industry():
+    a = assess_payout_safety(
+        sector="Financial Services",
+        industry="Banks - Regional",
+        kind_override="insurer",
+        annual_dividend=1.26,
+        gaap_eps=3,
+        insurer_metrics={"combined_ratio": 0.95},
+    )
+    assert a.sector_kind == "insurer"
+    assert a.routing_source == "kind_override"
+
+
+def test_invalid_kind_override_holds_review():
+    a = assess_payout_safety(
+        sector="Consumer Staples",
+        kind_override="bogus",
+        annual_dividend=1.0,
+        gaap_eps=3.0,
+        adjusted_eps=3.0,
+        adjusted_eps_source="FMP",
+        fcf_per_share=2.5,
+    )
+    assert a.sector_kind == "unknown"
+    assert a.safety_verdict == "HOLD-REVIEW"
+    assert "kind_override_invalid" in a.blockers
