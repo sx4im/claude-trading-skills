@@ -233,7 +233,9 @@ Always produce:
    blockers). Include evidence per row.
 2. One-page stock memo (use `references/stock-note-template.md`) with the
    per-ticker **provenance block** (price/dividend/payout/event sources,
-   `unresolved_blockers`, `evidence_refs[]`).
+   `unresolved_blockers`, `evidence_refs[]`). Each row also records its
+   `price_date` (from the quote timestamp) and flags a mismatch with the
+   run's `as_of`, so a stale price is visible in the report.
 3. Limit-order plan with split sizing, blocker gate, and invalidation.
 4. Top-level **run_context** (profile, yield_floor_pct, safety_bias,
    universe_source, excluded_asset_types) so a 3%-run result is never

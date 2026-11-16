@@ -12,7 +12,7 @@ can detect and tolerate schema evolution.
 from __future__ import annotations
 
 # JSON output contract version (WS-1 / MJ-10).
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # --- Step 1: yield floor + entry alpha ---
 DEFAULT_ALPHA_PP = 0.5
@@ -49,9 +49,13 @@ SPECIAL_REVERT_MULTIPLE = 1.2
 # payer (e.g. CALM pays ~1/3 of net income).
 VARIABLE_POLICY_COV = 0.35
 
-# Equality epsilon for freeze/cut comparisons of regular per-payment rates
-# (absolute USD per share). Differences within this tolerance are "equal".
-DIVIDEND_EQUALITY_EPS = 0.005
+# Equality tolerance for increase/freeze comparisons of regular per-payment
+# rates (#770): relative to the prior amount, with an absolute floor so tiny
+# payments still have a noise band. A fixed $0.005 epsilon hid real raises
+# on monthly payers (a $0.0025 raise on $0.27 is +0.9% but under $0.005).
+# Differences within max(MIN_EPS, REL_TOL * |prior|) are "equal".
+DIVIDEND_EQUALITY_MIN_EPS = 0.0005
+DIVIDEND_EQUALITY_REL_TOL = 0.005
 # Material cut screen; independent of the finer raise/freeze tolerance (#770).
 DIVIDEND_CUT_REL_TOL = 0.05
 DIVIDEND_CUT_LOOKBACK_DAYS = 365

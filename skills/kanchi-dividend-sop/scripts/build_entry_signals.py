@@ -84,6 +84,28 @@ def to_float(value: Any) -> float | None:
         return None
 
 
+def quote_price_date(quote: dict[str, Any] | None) -> str | None:
+    """Price date (YYYY-MM-DD, UTC) from an FMP quote `timestamp`, or None.
+
+    FMP quotes carry `timestamp` as Unix epoch seconds. A missing or
+    unparsable timestamp means the price date is unknown, never guessed.
+    """
+    raw = (quote or {}).get("timestamp")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw.lstrip("-").isdigit():
+            return None
+        raw = int(raw)
+    if not isinstance(raw, (int, float)) or raw <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(raw, tz=timezone.utc).date().isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def normalize_metrics_yields(metrics: list[dict[str, Any]], max_points: int = 5) -> list[float]:
     yields_pct: list[float] = []
     for item in metrics:
@@ -231,6 +253,10 @@ def build_entry_row(
     as_of: str | None = None,
 ) -> dict[str, Any]:
     price = to_float((quote or {}).get("price"))
+    # #770 finding 3: record the per-ticker price date (from the quote
+    # timestamp) and flag rows priced on a different date than the run.
+    price_date = quote_price_date(quote)
+    price_date_mismatch = price_date is not None and as_of is not None and price_date != as_of
 
     # WS-1: prefer the regular run-rate from declared-dividend history over
     # profile.lastDiv (which is a trailing/TTM figure that lagged the latest
@@ -307,9 +333,13 @@ def build_entry_row(
 
     if target_withheld_reason:
         notes.append(target_withheld_reason)
+    if price_date_mismatch:
+        notes.append("price_date_mismatch")
 
     row: dict[str, Any] = {
         "ticker": ticker,
+        "price_date": price_date,
+        "price_date_mismatch": price_date_mismatch,
         "annual_dividend_basis": numerator_basis,
         "historical_yield_basis": "provider_total_unverified",
         "yield_basis": "unavailable" if target_withheld_reason else "provider_total_unverified",
@@ -468,6 +498,8 @@ def build_entry_row(
     row["verdict_reasons"] = final.reasons
     row["provenance"] = {
         "price_source": "fmp_quote" if quote else None,
+        "price_date": price_date,
+        "price_date_mismatch": price_date_mismatch,
         "dividend_source": "fmp_stock_dividend" if dividend_history else "fmp_profile_lastDiv",
         "dividend_dates_used": (basis.dividend_dates_used if basis else []),
         "payout_source": (financials or {}).get("adjusted_eps_source", "UNAVAILABLE"),
@@ -557,6 +589,15 @@ def render_markdown(rows: list[dict[str, Any]], as_of: str, alpha_pp: float) -> 
                     f"`{row['historical_yield_basis']}`.",
                 ]
             )
+    for row in rows:
+        if row.get("price_date_mismatch"):
+            lines.extend(
+                [
+                    "",
+                    f"- {row['ticker']}: price as of `{row.get('price_date')}`, "
+                    f"run as_of `{as_of}` — yields use a stale price.",
+                ]
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -574,6 +615,8 @@ def write_csv(rows: list[dict[str, Any]], output_path: Path) -> None:
         "event_scan_result",
         "pre_order_blockers",
         "price",
+        "price_date",
+        "price_date_mismatch",
         "annual_dividend_per_share",
         "regular_forward_yield_pct",
         "ttm_yield_pct",

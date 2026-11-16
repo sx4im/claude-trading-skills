@@ -116,9 +116,21 @@ The 5% threshold is a configurable screening policy, not proof of an issuer's
 board-declared cut or its original-currency cause; a larger FX change can still
 require source review. This input has no original-currency declaration evidence.
 
-`DIVIDEND_EQUALITY_EPS` still governs increase/freeze comparisons. Issue #770
-separately owns the finer monthly-raise tolerance, TTM evaluation-date window and
-price-date provenance; those changes are not folded into #768.
+## Issue #770: finer raise tolerance, TTM window, price-date provenance
+
+Increase/freeze comparisons use a relative tolerance, not a fixed $0.005
+epsilon: two per-payment rates are "equal" within
+`max(DIVIDEND_EQUALITY_MIN_EPS, DIVIDEND_EQUALITY_REL_TOL * |prior|)`
+(`MIN_EPS` 0.0005, `REL_TOL` 0.005 = 0.5%). A $0.0025 monthly raise on a
+$0.27 pay (+0.9%) is now detected as an increase; sub-cent wobble stays
+equal. The material-cut screen still uses the separate 5% relative
+tolerance (`DIVIDEND_CUT_REL_TOL`).
+
+The TTM window ends at the run's evaluation date (`as_of`), not at the
+latest payment; without an evaluation date it still ends at the latest
+payment. Each row records `price_date` from the FMP quote `timestamp` and
+flags `price_date_mismatch` when it differs from the run's `as_of`; the
+markdown report lists mismatched rows. Output schema version 5.
 
 A supplied non-positive GAAP EPS deliberately HOLDs even when adjusted EPS is
 positive: this conservative gate runs before one-off/divergence classification.
