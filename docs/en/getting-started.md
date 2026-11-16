@@ -143,7 +143,7 @@ Prices and limits below were read on 2026-11-14 from the Personal Use tab of FMP
 The free plan is enough for small universes that use endpoints included in Basic. The stock screener is not included in Basic (see below). The paid plans state their limits per minute; the page also lists other plan limits, so check it before sizing a large run.
 
 Plan-gated endpoints (as of 2026-11):
-The stock/company screener and economic calendar endpoints returned HTTP 402 on a Basic key.
+The stock/company screener and economic calendar endpoints returned HTTP 402 on a Basic key. The per-symbol endpoints used for detailed analysis (income-statement, dividends, historical prices, ratios) returned the same HTTP 402 'Premium Query Parameter' refusal in the synthetic repro for issue #777; whether a live Basic key hits them the same way is not verified.
 
 Institutional-ownership (13F) data was also unavailable on the same key; it was an unavailable dataset, not an HTTP refusal. Skills that rely on these endpoints need a plan that includes them; check `site.financialmodelingprep.com/pricing-plans`.
 

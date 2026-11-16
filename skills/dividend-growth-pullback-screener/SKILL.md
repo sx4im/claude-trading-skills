@@ -28,7 +28,7 @@ Use this skill when:
 
 ## Prerequisites
 
-- **FMP API key** (required): Set `FMP_API_KEY` environment variable or pass `--fmp-api-key`. The free plan has a daily request budget; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11). Use `--use-finviz` or an FMP plan that includes it (see `docs/en/getting-started.md#fmp-plans`). [Sign up](https://site.financialmodelingprep.com/developer/docs).
+- **FMP API key** (required): Set `FMP_API_KEY` environment variable or pass `--fmp-api-key`. The free plan has a daily request budget; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11). Use `--use-finviz` or an FMP plan that includes it (see `docs/en/getting-started.md#fmp-plans`). The per-symbol endpoints used for detailed analysis can also be plan-gated on a Basic key; a run that hits that exits 1 with a plan-gating error instead of an empty result. [Sign up](https://site.financialmodelingprep.com/developer/docs).
 - **FINVIZ Elite API key** (optional, recommended): Set `FINVIZ_API_KEY` environment variable or pass `--finviz-api-key`. Reduces execution time from 10–15 min to 2–3 min. [Sign up](https://elite.finviz.com/).
 - Python 3.9+ with the `requests` library installed.
 

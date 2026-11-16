@@ -24,11 +24,11 @@ Moved verbatim from `SKILL.md`.
 - Annual: $299.50 (~$24.96/month)
 
 **FMP API:**
-- Free tier: 250 calls/day rate limit. The stock-screener endpoint used by FMP-only screening is not on the free plan (2026-11); use two-stage screening or a plan that includes it. See `docs/en/getting-started.md#fmp-plans`.
+- Free tier: 250 calls/day rate limit. The stock-screener endpoint used by FMP-only screening is not on the free plan (2026-11); use two-stage screening or a plan that includes it. The per-symbol endpoints used for detailed analysis (income-statement, dividends, historical prices, ratios) returned the same 402 refusal in the synthetic repro for #777, so a free-tier run can still end plan-gated; the screeners report that instead of an empty result. See `docs/en/getting-started.md#fmp-plans`.
 - Paid plans: prices and limits change; see `site.financialmodelingprep.com/pricing-plans` in a browser
 
 **Recommendation:**
-- **For free FMP tier users**: Use two-stage screening (FINVIZ + FMP free tier); FMP-only needs the plan-gated stock screener
+- **For free FMP tier users**: Use two-stage screening (FINVIZ + FMP free tier); FMP-only needs the plan-gated stock screener. Per-symbol endpoints can still be plan-gated on a Basic key (see the FMP note above); a run that hits that reports plan-gating instead of an empty result
 - **For paid FMP tier users**: Either approach works; two-stage is faster
 - **Budget option**: FMP-only on a plan that includes the stock screener (the free plan does not)
 - **Optimal option**: FINVIZ Elite ($330/year) + FMP free tier for two-stage screening

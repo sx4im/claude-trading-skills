@@ -143,7 +143,7 @@ python3 skills/canslim-screener/scripts/screen_canslim.py --api-key YOUR_KEY
 無料プランは、Basic に含まれるエンドポイントを使う少数銘柄のスクリーニングには十分です。株価スクリーナーは Basic に含まれません（下記参照）。有料プランの上限は分あたりで示されています。料金ページにはほかの制限も載っているので、大きな実行の前に確認してください。
 
 プラン限定エンドポイント（2026-11 時点）:
-stock/company screener と economic calendar のエンドポイントは Basic キーで HTTP 402 を返しました。
+stock/company screener と economic calendar のエンドポイントは Basic キーで HTTP 402 を返しました。詳細分析で使う銘柄単位のエンドポイント（income-statement、dividends、historical prices、ratios）も issue #777 の合成再現では同じ HTTP 402 'Premium Query Parameter' 拒否を返しました。実際の Basic キーで同じように拒否されるかは未検証です。
 
 institutional-ownership（13F）データも同じキーでは利用できませんでした。データ自体が提供されない扱いで、HTTP エラーではありません。これらのエンドポイントに依存するスキルは、それらを含むプランが必要です。`site.financialmodelingprep.com/pricing-plans` を確認してください。
 

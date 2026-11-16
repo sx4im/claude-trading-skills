@@ -733,6 +733,7 @@ def screen_dividend_growth_pullbacks(
     rsi_max: float = 40.0,
     max_candidates: int = None,
     finviz_symbols: Optional[set[str]] = None,
+    plan_gating_summary: Optional[dict] = None,
 ) -> list[dict]:
     """
     Main screening function.
@@ -744,6 +745,8 @@ def screen_dividend_growth_pullbacks(
         rsi_max: Maximum RSI value (default 40)
         max_candidates: Maximum number of candidates to analyze (None = all)
         finviz_symbols: Optional set of symbols from FINVIZ pre-screening
+        plan_gating_summary: Optional dict filled with the run's plan-gating
+            counts (``plan_restricted_symbols`` / ``plan_restricted_responses``)
 
     Returns:
         List of qualified stocks with full analysis
@@ -751,6 +754,18 @@ def screen_dividend_growth_pullbacks(
     client = FMPClient(api_key)
     analyzer = StockAnalyzer()
     rsi_calc = RSICalculator()
+
+    # Plan-gating counts for the analysis stage. _last_error holds only the
+    # most recent request, so each per-symbol fetch is checked right after it
+    # runs; the restricted set, not the final error, decides whether the run
+    # was plan-gated.
+    summary = {"plan_restricted_symbols": 0, "plan_restricted_responses": 0}
+    analysis_restricted: set[str] = set()
+
+    def _note_plan_restriction(symbol: str) -> None:
+        if _is_plan_restriction(getattr(client, "_last_error", None)):
+            analysis_restricted.add(symbol)
+            summary["plan_restricted_responses"] += 1
 
     print(f"\n{'=' * 80}", file=sys.stderr)
     print("Dividend Growth Pullback Screener", file=sys.stderr)
@@ -844,6 +859,7 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch dividend history
         dividend_history = client.get_dividend_history(symbol)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
@@ -878,6 +894,7 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch historical prices for RSI
         historical_prices = client.get_historical_prices(symbol, days=30)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
@@ -901,18 +918,22 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch additional fundamental data
         income_stmts = client.get_income_statement(symbol, limit=5)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
         balance_sheet = client.get_balance_sheet(symbol, limit=5)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
         cash_flow = client.get_cash_flow(symbol, limit=5)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
         key_metrics = client.get_key_metrics(symbol, limit=1)
+        _note_plan_restriction(symbol)
         if client.rate_limit_reached:
             break
 
@@ -1004,6 +1025,31 @@ def screen_dividend_growth_pullbacks(
         results.append(result)
         print(f"  ✅ QUALIFIED - Score: {result['composite_score']}", file=sys.stderr)
 
+    # A symbol counts as skipped for plan gating only when it had a
+    # restricted per-symbol fetch and did not qualify; a restricted fetch on
+    # a symbol that still qualified is a response, not a skip.
+    qualified = {r["symbol"] for r in results}
+    skipped = analysis_restricted - qualified
+    summary["plan_restricted_symbols"] += len(skipped)
+    if plan_gating_summary is not None:
+        plan_gating_summary.update(summary)
+    if not results and analysis_restricted:
+        raise FMPPlanRestrictedError(
+            "FMP plan does not include the per-symbol endpoints required for "
+            "detailed analysis (income-statement, dividends, historical prices "
+            "returned HTTP 402/403); "
+            f"{len(skipped)} candidate(s) could not be analyzed, so no stocks "
+            "qualified. Switch to an FMP plan that includes these endpoints. See "
+            "docs/en/getting-started.md#fmp-plans."
+        )
+    if skipped:
+        print(
+            f"⚠️  {len(skipped)} candidate(s) skipped for plan gating: FMP refused "
+            "per-symbol data (income-statement / dividends / historical prices, "
+            "HTTP 402/403).",
+            file=sys.stderr,
+        )
+
     # Sort by composite score
     results.sort(key=lambda x: x["composite_score"], reverse=True)
 
@@ -1015,8 +1061,18 @@ def screen_dividend_growth_pullbacks(
     return results
 
 
-def generate_markdown_report(results: list[dict], criteria: dict, output_path: str):
-    """Generate human-readable markdown report."""
+def generate_markdown_report(
+    results: list[dict],
+    criteria: dict,
+    output_path: str,
+    plan_gating_summary: Optional[dict] = None,
+):
+    """Generate human-readable markdown report.
+
+    plan_gating_summary: optional run plan-gating counts; when symbols were
+    skipped for plan gating, the report says so instead of reading as a
+    clean empty result.
+    """
 
     report = f"""# Dividend Growth Pullback Screening Report
 
@@ -1038,6 +1094,14 @@ def generate_markdown_report(results: list[dict], criteria: dict, output_path: s
 ---
 
 """
+
+    if plan_gating_summary and plan_gating_summary.get("plan_restricted_symbols", 0):
+        report += (
+            f"\n> ⚠️ {plan_gating_summary['plan_restricted_symbols']} candidate(s) "
+            "were skipped for plan gating: FMP refused per-symbol data "
+            "(income-statement / dividends / historical prices, HTTP 402/403). "
+            "The stocks below cover only the candidates whose data was available.\n"
+        )
 
     if not results:
         report += """## No Stocks Qualified
@@ -1335,6 +1399,7 @@ Environment Variables:
 
     # Run screening
     try:
+        plan_gating_summary: dict = {}
         results = screen_dividend_growth_pullbacks(
             api_key=fmp_api_key,
             min_yield=args.min_yield,
@@ -1342,6 +1407,7 @@ Environment Variables:
             rsi_max=args.rsi_max,
             max_candidates=args.max_candidates,
             finviz_symbols=finviz_symbols,
+            plan_gating_summary=plan_gating_summary,
         )
     except FMPPlanRestrictedError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
@@ -1376,6 +1442,14 @@ Environment Variables:
         "stocks": results,
     }
 
+    if plan_gating_summary.get("plan_restricted_symbols", 0):
+        json_output["metadata"]["plan_restricted_symbols"] = plan_gating_summary[
+            "plan_restricted_symbols"
+        ]
+        json_output["metadata"]["plan_restricted_responses"] = plan_gating_summary.get(
+            "plan_restricted_responses", 0
+        )
+
     json_path = os.path.join(logs_dir, f"dividend_growth_pullback_results_{today}.json")
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump(json_output, f, indent=2)
@@ -1384,7 +1458,7 @@ Environment Variables:
 
     # Markdown report
     md_path = os.path.join(logs_dir, f"dividend_growth_pullback_screening_{today}.md")
-    generate_markdown_report(results, criteria, md_path)
+    generate_markdown_report(results, criteria, md_path, plan_gating_summary)
 
     print(f"\n{'=' * 80}", file=sys.stderr)
     print(f"Screening complete! Found {len(results)} qualified stocks.", file=sys.stderr)

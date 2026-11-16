@@ -18,7 +18,7 @@ Financial Modeling Prep provides comprehensive financial data APIs for stocks, f
 - **250 requests per day**
 - **Rate limit**: ~5 requests per second
 - **No credit card required**
-- Sufficient for daily/weekly two-stage runs; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11)
+- Sufficient for daily/weekly two-stage runs within the call budget; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11). The per-symbol endpoints used for detailed analysis can also be plan-gated on a Basic key (synthetic repro, #777); a run that hits that reports plan-gating instead of an empty result. See `docs/en/getting-started.md#fmp-plans`
 
 ### Paid Plans (Optional)
 

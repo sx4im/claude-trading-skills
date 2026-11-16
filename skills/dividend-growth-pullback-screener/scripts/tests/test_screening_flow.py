@@ -341,6 +341,62 @@ class TestPlanGating:
         assert mod.screen_dividend_growth_pullbacks("key", finviz_symbols={"AAA"}) == []
 
 
+PLAN_402 = "HTTP 402 - Premium Query Parameter: not available under your current subscription"
+
+
+class TestPlanGatingAnalysis:
+    """Per-symbol (#777) plan gating in the detailed-analysis stage."""
+
+    def test_all_plan_restricted_raises_fmp_only(self, mod, fake_fmp):
+        fake_fmp.registry["screen"] = [_stock("AAA")]
+        fake_fmp.registry["div"] = {"AAA": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:AAA": PLAN_402}
+        summary = {}
+        with pytest.raises(mod.FMPPlanRestrictedError, match="per-symbol"):
+            mod.screen_dividend_growth_pullbacks("key", plan_gating_summary=summary)
+        assert summary == {"plan_restricted_symbols": 1, "plan_restricted_responses": 1}
+
+    def test_all_plan_restricted_raises_finviz(self, mod, fake_fmp):
+        fake_fmp.registry["quotes"] = {"AAA": _stock("AAA")}
+        fake_fmp.registry["div"] = {"AAA": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:AAA": PLAN_402}
+        with pytest.raises(mod.FMPPlanRestrictedError, match="per-symbol"):
+            mod.screen_dividend_growth_pullbacks("key", finviz_symbols={"AAA"})
+
+    def test_partial_reports_skipped_count(self, mod, fake_fmp, capsys):
+        fake_fmp.registry["screen"] = [_stock("GOOD"), _stock("BAD")]
+        fake_fmp.registry["div"] = {"BAD": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:BAD": PLAN_402}
+        summary = {}
+        results = mod.screen_dividend_growth_pullbacks("key", plan_gating_summary=summary)
+        assert [r["symbol"] for r in results] == ["GOOD"]
+        assert summary == {"plan_restricted_symbols": 1, "plan_restricted_responses": 1}
+        assert "1 candidate(s) skipped for plan gating" in capsys.readouterr().err
+
+    def test_genuine_empty_is_not_plan_restriction(self, mod, fake_fmp):
+        fake_fmp.registry["screen"] = [_stock("AAA")]
+        fake_fmp.registry["div"] = {"AAA": {}}
+        summary = {}
+        assert mod.screen_dividend_growth_pullbacks("key", plan_gating_summary=summary) == []
+        assert summary == {"plan_restricted_symbols": 0, "plan_restricted_responses": 0}
+
+    def test_invalid_key_403_is_not_plan_restriction(self, mod, fake_fmp):
+        fake_fmp.registry["screen"] = [_stock("AAA")]
+        fake_fmp.registry["div"] = {"AAA": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:AAA": "HTTP 403 - Invalid API KEY"}
+        summary = {}
+        assert mod.screen_dividend_growth_pullbacks("key", plan_gating_summary=summary) == []
+        assert summary == {"plan_restricted_symbols": 0, "plan_restricted_responses": 0}
+
+    def test_rate_limit_is_not_plan_restriction(self, mod, fake_fmp):
+        fake_fmp.registry["screen"] = [_stock("AAA")]
+        fake_fmp.registry["div"] = {"AAA": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:AAA": "HTTP 429 (daily rate limit)"}
+        summary = {}
+        assert mod.screen_dividend_growth_pullbacks("key", plan_gating_summary=summary) == []
+        assert summary == {"plan_restricted_symbols": 0, "plan_restricted_responses": 0}
+
+
 class TestHistoricalPrices:
     def _bars(self, n):
         return [{"close": 100.0 - i} for i in range(n)]
@@ -731,6 +787,9 @@ class FakeFMP:
         return data
 
     def _per(self, key, symbol, default):
+        # Mirror the real client: _last_error holds the most recent request's
+        # redacted error and clears on success.
+        self._last_error = FakeFMP.registry.get("last_error_by_call", {}).get(f"{key}:{symbol}")
         return FakeFMP.registry.get(key, {}).get(symbol, default)
 
     def get_dividend_history(self, symbol):
@@ -1145,6 +1204,37 @@ class TestMain:
         assert "FMP plan does not include the stock screener endpoint" in capsys.readouterr().err
         assert not (cli_env / "logs").exists()
 
+    def test_analysis_plan_restriction_exits_1_before_output(
+        self, mod, cli_env, monkeypatch, fake_fmp, capsys
+    ):
+        fake_fmp.registry["screen"] = [_stock("AAA")]
+        fake_fmp.registry["div"] = {"AAA": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:AAA": PLAN_402}
+        monkeypatch.setenv("FMP_API_KEY", "fmp")
+        with pytest.raises(SystemExit) as exc:
+            _run_main(mod, monkeypatch, [])
+        assert exc.value.code == 1
+        assert "per-symbol" in capsys.readouterr().err
+        assert not (cli_env / "logs").exists()
+
+    def test_partial_plan_gating_writes_metadata_and_note(
+        self, mod, cli_env, monkeypatch, fake_fmp
+    ):
+        fake_fmp.registry["screen"] = [_stock("GOOD"), _stock("BAD")]
+        fake_fmp.registry["div"] = {"BAD": {}}
+        fake_fmp.registry["last_error_by_call"] = {"div:BAD": PLAN_402}
+        monkeypatch.setenv("FMP_API_KEY", "fmp")
+        _run_main(mod, monkeypatch, [])
+        logs = cli_env / "logs"
+        (json_path,) = logs.glob("dividend_growth_pullback_results_*.json")
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        assert payload["metadata"]["total_results"] == 1
+        assert payload["metadata"]["plan_restricted_symbols"] == 1
+        assert payload["metadata"]["plan_restricted_responses"] == 1
+        assert [s["symbol"] for s in payload["stocks"]] == ["GOOD"]
+        (md_path,) = logs.glob("dividend_growth_pullback_screening_*.md")
+        assert "skipped for plan gating" in md_path.read_text(encoding="utf-8")
+
     def test_finviz_flag_without_key_exits_1(self, mod, cli_env, monkeypatch, capsys):
         monkeypatch.setenv("FMP_API_KEY", "fmp")
         with pytest.raises(SystemExit) as exc:
@@ -1190,6 +1280,7 @@ class TestMain:
                 "7",
             ],
         )
+        assert captured.pop("plan_gating_summary") == {}
         assert captured == {
             "api_key": "env-fmp",  # pragma: allowlist secret
             "min_yield": 2.0,

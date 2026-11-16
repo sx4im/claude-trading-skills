@@ -28,7 +28,7 @@ Invoke this skill when the user requests:
 
 ## Prerequisites
 
-- **FMP API key:** Required. Set `FMP_API_KEY` or pass `--fmp-api-key`. The stock-screener endpoint is not on the free plan (2026-11); use `--use-finviz` or an FMP plan that includes it (see `docs/en/getting-started.md#fmp-plans`).
+- **FMP API key:** Required. Set `FMP_API_KEY` or pass `--fmp-api-key`. The stock-screener endpoint is not on the free plan (2026-11); use `--use-finviz` or an FMP plan that includes it (see `docs/en/getting-started.md#fmp-plans`). The per-symbol endpoints used for detailed analysis can also be plan-gated on a Basic key; a run that hits that exits 1 with a plan-gating error instead of an empty result.
 - **FINVIZ Elite API key:** Recommended, not required. Set `FINVIZ_API_KEY` or pass `--finviz-api-key` and use `--use-finviz` for two-stage screening. Without it the screener runs FMP-only and uses more API calls.
 - **Python:** 3.9+ with `requests>=2.31.0` (see `requirements.txt`).
 
