@@ -340,6 +340,45 @@ class TestPlanGating:
         monkeypatch.setattr(mod, "FMPClient", lambda key: NoErrorAttr())
         assert mod.screen_dividend_growth_pullbacks("key", finviz_symbols={"AAA"}) == []
 
+    def test_analysis_stage_all_plan_restricted_raises(self, mod, fake_fmp, capsys):
+        fake_fmp.registry = {
+            "quotes": {"GOOD": {"symbol": "GOOD", "price": 20.0}},
+            "plan_gated": {"div": {"GOOD"}, "prices": {"GOOD"}},
+        }
+        with pytest.raises(mod.FMPPlanRestrictedError, match="per-symbol endpoints"):
+            mod.screen_dividend_growth_pullbacks("key", finviz_symbols={"GOOD"})
+        assert "dividends" in capsys.readouterr().err
+
+    def test_fmp_only_analysis_stage_all_plan_restricted_raises(self, mod, fake_fmp, capsys):
+        fake_fmp.registry = {
+            "screen": [
+                {"symbol": "GOOD", "companyName": "GOOD Inc", "price": 20.0, "sector": "Tech"}
+            ],
+            "plan_gated": {"div": {"GOOD"}},
+        }
+        with pytest.raises(mod.FMPPlanRestrictedError, match="per-symbol endpoints"):
+            mod.screen_dividend_growth_pullbacks("key")
+        assert "dividends" in capsys.readouterr().err
+
+    def test_analysis_stage_partial_gating_reports_skipped(self, mod, fake_fmp, capsys):
+        fake_fmp.registry = {
+            "quotes": {
+                "GOOD": {"symbol": "GOOD", "price": 20.0},
+                "BAD": {"symbol": "BAD", "price": 20.0},
+            },
+            "plan_gated": {"div": {"BAD"}},
+        }
+        results = mod.screen_dividend_growth_pullbacks("key", finviz_symbols=["GOOD", "BAD"])
+        assert [r["symbol"] for r in results] == ["GOOD"]
+        assert "Skipped 1 candidate" in capsys.readouterr().err
+
+    def test_analysis_stage_genuine_empty_is_not_plan_restriction(self, mod, fake_fmp):
+        fake_fmp.registry = {
+            "quotes": {"GOOD": {"symbol": "GOOD", "price": 20.0}},
+            "div": {"GOOD": None},
+        }
+        assert mod.screen_dividend_growth_pullbacks("key", finviz_symbols={"GOOD"}) == []
+
 
 class TestHistoricalPrices:
     def _bars(self, n):
@@ -733,16 +772,37 @@ class FakeFMP:
     def _per(self, key, symbol, default):
         return FakeFMP.registry.get(key, {}).get(symbol, default)
 
+    def _plan_gated(self, key, symbol):
+        """Mark a fetch as plan-gated: set _last_error and return True."""
+        if symbol in FakeFMP.registry.get("plan_gated", {}).get(key, set()):
+            self._last_error = (
+                "HTTP 402 - Premium Query Parameter: not available under your current subscription"
+            )
+            return True
+        return False
+
     def get_dividend_history(self, symbol):
+        self._last_error = None
+        if self._plan_gated("div", symbol):
+            return None
         return self._per("div", symbol, GOOD_DIVIDENDS)
 
     def get_historical_prices(self, symbol, days=30):
+        self._last_error = None
+        if self._plan_gated("prices", symbol):
+            return None
         return self._per("prices", symbol, _oversold_bars())
 
     def get_income_statement(self, symbol, limit=5):
+        self._last_error = None
+        if self._plan_gated("income", symbol):
+            return []
         return self._per("income", symbol, _income())
 
     def get_balance_sheet(self, symbol, limit=5):
+        self._last_error = None
+        if self._plan_gated("balance", symbol):
+            return []
         return self._per(
             "balance",
             symbol,
@@ -757,9 +817,15 @@ class FakeFMP:
         )
 
     def get_cash_flow(self, symbol, limit=5):
+        self._last_error = None
+        if self._plan_gated("cf", symbol):
+            return []
         return self._per("cf", symbol, [{"dividendsPaid": -200, "freeCashFlow": 800}])
 
     def get_key_metrics(self, symbol, limit=1):
+        self._last_error = None
+        if self._plan_gated("metrics", symbol):
+            return []
         return self._per(
             "metrics",
             symbol,

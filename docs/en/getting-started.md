@@ -147,6 +147,8 @@ The stock/company screener and economic calendar endpoints returned HTTP 402 on 
 
 Institutional-ownership (13F) data was also unavailable on the same key; it was an unavailable dataset, not an HTTP refusal. Skills that rely on these endpoints need a plan that includes them; check `site.financialmodelingprep.com/pricing-plans`.
 
+The dividend screeners' per-symbol analysis endpoints (income statement, stock dividends, historical prices, ratios) were also observed returning HTTP 402 "Premium Query Parameter" in offline review of the #764 fix (issue #777); how often a real Basic key hits that is not verified. When plan gating empties a run's analysis stage, the screeners report the run as plan-gated (exit 1) instead of reporting zero matches, and report how many candidates were skipped when only some are gated.
+
 ### FINVIZ Elite
 
 Speeds up dividend screener execution (70-80% faster) and provides full industry coverage for Theme Detector.

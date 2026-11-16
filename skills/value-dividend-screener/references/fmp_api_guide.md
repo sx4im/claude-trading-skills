@@ -18,7 +18,7 @@ Financial Modeling Prep provides comprehensive financial data APIs for stocks, f
 - **250 requests per day**
 - **Rate limit**: ~5 requests per second
 - **No credit card required**
-- Sufficient for daily/weekly two-stage runs; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11)
+- Sufficient for daily/weekly two-stage runs; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11). The per-symbol analysis endpoints (income statement, dividends, historical prices, ratios) were also observed returning HTTP 402 in offline review (issue #777); a run gated there reports plan-gating instead of zero matches. See `docs/en/getting-started.md#fmp-plans`.
 
 ### Paid Plans (Optional)
 
@@ -279,6 +279,14 @@ For a plan that includes the stock screener (the free plan does not, 2026-11; se
 **4. Insufficient Data**
 - Empty array returned for financial statements
 **Solution**: Script skips symbol (common for newly listed stocks or incomplete data)
+
+**5. Plan-Gated Endpoint (402)**
+```json
+{
+  "Error Message": "Premium Query Parameter: not available under your current subscription"
+}
+```
+**Solution**: The FMP plan does not include an endpoint the run needs (stock screener, or a per-symbol analysis endpoint such as income statement, dividends or historical prices). The screener exits 1 and reports plan-gating instead of an empty result. Switch to a plan that includes the endpoint; see `docs/en/getting-started.md#fmp-plans`.
 
 ### Debugging
 

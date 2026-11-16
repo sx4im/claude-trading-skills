@@ -35,7 +35,7 @@ This screener supports two screening modes:
 - **250 requests per day**
 - **Rate limit**: ~5 requests per second
 - **No credit card required**
-- Sufficient for daily/weekly two-stage runs; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11)
+- Sufficient for daily/weekly two-stage runs; the stock-screener endpoint used by FMP-only mode is not on the free plan (2026-11). The per-symbol analysis endpoints (income statement, dividends, historical prices, ratios) were also observed returning HTTP 402 in offline review (issue #777); a run gated there reports plan-gating instead of zero matches. See `docs/en/getting-started.md#fmp-plans`.
 
 ### Paid Plans (Optional)
 
@@ -436,6 +436,14 @@ When using FINVIZ pre-screening (`--use-finviz`):
 - Empty dividend history or < 4 years of data
 **Solution**: Script skips symbol (requires 4+ years to calculate 3-year CAGR)
 
+**6. Plan-Gated Endpoint (402)**
+```json
+{
+  "Error Message": "Premium Query Parameter: not available under your current subscription"
+}
+```
+**Solution**: The FMP plan does not include an endpoint the run needs (stock screener, or a per-symbol analysis endpoint such as income statement, dividends or historical prices). The screener exits 1 and reports plan-gating instead of an empty result. Switch to a plan that includes the endpoint; see `docs/en/getting-started.md#fmp-plans`.
+
 ### Debugging
 
 **Check request count:**
@@ -598,6 +606,7 @@ prices = ticker.history(period="1mo")
 1. All stocks failed RSI check (market not oversold)
 2. High dividend growth (12%+) is rare
 3. API rate limit reached before finding qualified stocks
+4. FMP plan does not include a per-symbol analysis endpoint (income statement, dividends, historical prices) — the run exits 1 with a plan-gating error instead of reporting zero matches
 
 **Solutions:**
 - Relax RSI: `--rsi-max 45`

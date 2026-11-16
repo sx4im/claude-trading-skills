@@ -820,6 +820,15 @@ def screen_dividend_growth_pullbacks(
     print("Note: Analysis will continue until API rate limit is reached\n", file=sys.stderr)
 
     results = []
+    # Symbols whose analysis data was blocked by FMP plan gating, with the
+    # endpoints that refused them. A symbol counts as skipped only when it is
+    # gated AND does not qualify (a gated fetch on a non-decisive endpoint can
+    # still leave a qualifying result).
+    plan_gated: dict[str, set[str]] = {}
+
+    def _note_plan_gating(symbol: str, endpoint: str) -> None:
+        if _is_plan_restriction(getattr(client, "_last_error", None)):
+            plan_gated.setdefault(symbol, set()).add(endpoint)
 
     for i, stock in enumerate(candidates, 1):
         symbol = stock.get("symbol", "")
@@ -844,6 +853,7 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch dividend history
         dividend_history = client.get_dividend_history(symbol)
+        _note_plan_gating(symbol, "dividends")
         if client.rate_limit_reached:
             break
 
@@ -878,6 +888,7 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch historical prices for RSI
         historical_prices = client.get_historical_prices(symbol, days=30)
+        _note_plan_gating(symbol, "historical prices")
         if client.rate_limit_reached:
             break
 
@@ -901,18 +912,22 @@ def screen_dividend_growth_pullbacks(
 
         # Fetch additional fundamental data
         income_stmts = client.get_income_statement(symbol, limit=5)
+        _note_plan_gating(symbol, "income-statement")
         if client.rate_limit_reached:
             break
 
         balance_sheet = client.get_balance_sheet(symbol, limit=5)
+        _note_plan_gating(symbol, "balance-sheet-statement")
         if client.rate_limit_reached:
             break
 
         cash_flow = client.get_cash_flow(symbol, limit=5)
+        _note_plan_gating(symbol, "cash-flow-statement")
         if client.rate_limit_reached:
             break
 
         key_metrics = client.get_key_metrics(symbol, limit=1)
+        _note_plan_gating(symbol, "key-metrics")
         if client.rate_limit_reached:
             break
 
@@ -1003,6 +1018,24 @@ def screen_dividend_growth_pullbacks(
 
         results.append(result)
         print(f"  ✅ QUALIFIED - Score: {result['composite_score']}", file=sys.stderr)
+
+    qualified = {r["symbol"] for r in results}
+    skipped = sorted(s for s in plan_gated if s not in qualified)
+    if skipped:
+        endpoints = sorted({ep for s in skipped for ep in plan_gated[s]})
+        print(
+            f"⚠️  Skipped {len(skipped)} candidate(s): FMP plan does not include "
+            f"{', '.join(endpoints)} (HTTP 402/403); their analysis data was unavailable.",
+            file=sys.stderr,
+        )
+        if not results:
+            # Literal-only message: FMPPlanRestrictedError must stay a
+            # literal-only diagnostic type for the security-review scanner.
+            raise FMPPlanRestrictedError(
+                "FMP plan does not include the per-symbol endpoints required to analyze "
+                "candidates (HTTP 402/403). Switch to an FMP plan that includes them. "
+                "See docs/en/getting-started.md#fmp-plans."
+            )
 
     # Sort by composite score
     results.sort(key=lambda x: x["composite_score"], reverse=True)

@@ -147,6 +147,8 @@ stock/company screener と economic calendar のエンドポイントは Basic �
 
 institutional-ownership（13F）データも同じキーでは利用できませんでした。データ自体が提供されない扱いで、HTTP エラーではありません。これらのエンドポイントに依存するスキルは、それらを含むプランが必要です。`site.financialmodelingprep.com/pricing-plans` を確認してください。
 
+配当スクリーナーの銘柄別分析エンドポイント（income statement、stock dividends、historical prices、ratios）も、#764 の修正に対するオフラインでの確認で HTTP 402「Premium Query Parameter」を返すことが確認されました（issue #777）。実際の Basic キーでどの程度の頻度で発生するかは未検証です。分析段階がプラン制限で空になった場合、スクリーナーは 0 件の一致ではなくプラン制限として報告して exit 1 で終了し、一部の銘柄だけが制限された場合はスキップした銘柄数を報告します。
+
 ### FINVIZ Elite
 
 配当スクリーナーの高速化（実行時間 70-80% 短縮）や Theme Detector の精度向上に利用します。
