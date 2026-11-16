@@ -116,9 +116,14 @@ The 5% threshold is a configurable screening policy, not proof of an issuer's
 board-declared cut or its original-currency cause; a larger FX change can still
 require source review. This input has no original-currency declaration evidence.
 
-`DIVIDEND_EQUALITY_EPS` still governs increase/freeze comparisons. Issue #770
-separately owns the finer monthly-raise tolerance, TTM evaluation-date window and
-price-date provenance; those changes are not folded into #768.
+Increase/freeze comparisons use the finer #770 tolerance: a raise is detected
+when the new rate exceeds the prior by more than
+`max(DIVIDEND_EQUALITY_MIN_EPS, DIVIDEND_EQUALITY_REL_TOL * prior)` (floor 0.001,
+relative 0.005), so small monthly raises are no longer hidden by a fixed 0.005
+absolute epsilon. The TTM window ends at the evaluation date when one is given
+(`as_of_date`), not at the latest payment. Each row records `price_date` from
+the FMP quote timestamp and flags `price_date_mismatch` when it differs from
+the evaluation date (schema version 5).
 
 A supplied non-positive GAAP EPS deliberately HOLDs even when adjusted EPS is
 positive: this conservative gate runs before one-off/divergence classification.

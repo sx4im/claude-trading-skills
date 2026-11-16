@@ -84,6 +84,34 @@ def to_float(value: Any) -> float | None:
         return None
 
 
+def quote_price_date(quote: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    """Return (price_date, price_date_source) for an FMP quote row (#770).
+
+    FMP /stable quote rows carry the quote `timestamp` (unix epoch seconds,
+    UTC). Without it the price has no provenance date and the row records
+    None instead of silently implying the evaluation date.
+    """
+    if not quote:
+        return None, None
+    ts = to_float(quote.get("timestamp"))
+    if ts is not None:
+        try:
+            return (
+                datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat(),
+                "fmp_quote_timestamp",
+            )
+        except (OverflowError, OSError, ValueError):
+            pass
+    raw_date = quote.get("date")
+    if isinstance(raw_date, str):
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(raw_date, fmt).date().isoformat(), "fmp_quote_date"
+            except ValueError:
+                continue
+    return None, None
+
+
 def normalize_metrics_yields(metrics: list[dict[str, Any]], max_points: int = 5) -> list[float]:
     yields_pct: list[float] = []
     for item in metrics:
@@ -231,6 +259,11 @@ def build_entry_row(
     as_of: str | None = None,
 ) -> dict[str, Any]:
     price = to_float((quote or {}).get("price"))
+    # #770 finding 3: record the per-ticker price date instead of implying
+    # the price is as of the evaluation date. A price dated before the
+    # evaluation date is flagged, never silently treated as current.
+    price_date, price_date_source = quote_price_date(quote)
+    price_date_mismatch = bool(price_date is not None and as_of is not None and price_date != as_of)
 
     # WS-1: prefer the regular run-rate from declared-dividend history over
     # profile.lastDiv (which is a trailing/TTM figure that lagged the latest
@@ -296,6 +329,8 @@ def build_entry_row(
     notes: list[str] = []
     if quote is None:
         notes.append("quote_missing")
+    if price_date_mismatch:
+        notes.append("price_date_mismatch")
     if profile is None:
         notes.append("profile_missing")
     if annual_dividend is None:
@@ -317,6 +352,8 @@ def build_entry_row(
         "provider_avg_5y_yield_pct": provider_avg_yield,
         "signal": signal,
         "price": round(price, 2) if price is not None else None,
+        "price_date": price_date,
+        "price_date_mismatch": price_date_mismatch,
         "annual_dividend_per_share": round(annual_dividend, 4)
         if annual_dividend is not None
         else None,
@@ -468,6 +505,8 @@ def build_entry_row(
     row["verdict_reasons"] = final.reasons
     row["provenance"] = {
         "price_source": "fmp_quote" if quote else None,
+        "price_date": price_date,
+        "price_date_source": price_date_source,
         "dividend_source": "fmp_stock_dividend" if dividend_history else "fmp_profile_lastDiv",
         "dividend_dates_used": (basis.dividend_dates_used if basis else []),
         "payout_source": (financials or {}).get("adjusted_eps_source", "UNAVAILABLE"),
@@ -574,6 +613,7 @@ def write_csv(rows: list[dict[str, Any]], output_path: Path) -> None:
         "event_scan_result",
         "pre_order_blockers",
         "price",
+        "price_date",
         "annual_dividend_per_share",
         "regular_forward_yield_pct",
         "ttm_yield_pct",
